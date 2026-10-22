@@ -1,0 +1,77 @@
+name: Publish
+# Follows Hermes Agent's releases: every six hours, build the latest stable
+# Hermes release as this Kit, smoke-test it, then push :VERSION and move
+# :stable. A failed build never moves :stable. A change to the Kit itself
+# (push to main) or a manual run republishes the current release.
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish
+  cancel-in-progress: false
+env:
+  IMAGE: docker.io/mcavage/marsh-hermes
+jobs:
+  publish:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Latest Hermes release
+        id: hermes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag=$(gh api repos/NousResearch/hermes-agent/releases/latest -q .tag_name)
+          commit=$(gh api "repos/NousResearch/hermes-agent/commits/$tag" -q .sha)
+          case "$commit" in *[!0-9a-f]*|'') echo "bad commit for $tag" >&2; exit 1;; esac
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Hermes $tag at $commit"
+      - name: Already published?
+        id: check
+        env:
+          VERSION: ${{ steps.hermes.outputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "$VERSION is already published"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        if: steps.check.outputs.skip == 'false'
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        if: steps.check.outputs.skip == 'false'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and smoke-test
+        if: steps.check.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.hermes.outputs.version }}
+          COMMIT: ${{ steps.hermes.outputs.commit }}
+        run: |
+          set -eu
+          sed -i "s/\"hermes-agent@[^\"]*\"/\"hermes-agent@$VERSION\"/" hermes.yaml
+          docker buildx build --platform linux/arm64 --load -f hermes.yaml \
+            --build-arg "HERMES_COMMIT=$COMMIT" -t marsh-hermes:candidate .
+          docker run --rm --entrypoint /opt/hermes/src/.venv/bin/hermes marsh-hermes:candidate --version
+          # The Kit's entrypoint seeds a working config from an SBX-managed key.
+          docker run --rm -e HOME=/tmp/h -e SBX_CRED_ANTHROPIC_MODE=apikey --entrypoint sh marsh-hermes:candidate \
+            -c '/usr/local/bin/hermes --version >/dev/null && grep -q "provider: anthropic" /tmp/h/.hermes/config.yaml && grep -q "create_dir: ~/.agents/skills" /tmp/h/.hermes/config.yaml'
+      - name: Publish
+        if: steps.check.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.hermes.outputs.version }}
+          COMMIT: ${{ steps.hermes.outputs.commit }}
+        run: |
+          docker buildx build --platform linux/arm64 --push -f hermes.yaml \
+            --build-arg "HERMES_COMMIT=$COMMIT" -t "$IMAGE:$VERSION" -t "$IMAGE:stable" .
