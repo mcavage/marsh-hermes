@@ -67,6 +67,10 @@ jobs:
           # The Kit's entrypoint seeds a working config from an SBX-managed key.
           docker run --rm -e HOME=/tmp/h -e SBX_CRED_ANTHROPIC_MODE=apikey --entrypoint sh marsh-hermes:candidate \
             -c '/usr/local/bin/hermes --version >/dev/null && grep -q "provider: anthropic" /tmp/h/.hermes/config.yaml && grep -q "create_dir: ~/.agents/skills" /tmp/h/.hermes/config.yaml'
+          # With SBX's MCP gateway present, the config points Hermes at it.
+          docker run --rm -e HOME=/tmp/h -e MCP_GATEWAY_URL=http://mcp-gateway.docker.internal/mcp \
+            -e MCP_SENTINEL_TOKEN_NAME=ci-sentinel --entrypoint sh marsh-hermes:candidate \
+            -c '/usr/local/bin/hermes --version >/dev/null && grep -q "Authorization: Bearer ci-sentinel" /tmp/h/.hermes/config.yaml'
       - name: Publish
         if: steps.check.outputs.skip == 'false'
         env:
