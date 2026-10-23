@@ -62,8 +62,13 @@ jobs:
           set -eu
           sed -i "s/\"hermes-agent@[^\"]*\"/\"hermes-agent@$VERSION\"/" hermes.yaml
           docker buildx build --platform linux/arm64 --load -f hermes.yaml \
-            --build-arg "HERMES_COMMIT=$COMMIT" -t marsh-hermes:candidate .
-          docker run --rm --entrypoint /opt/hermes/src/.venv/bin/hermes marsh-hermes:candidate --version
+            --build-arg "HERMES_COMMIT=$COMMIT" --build-arg "HERMES_VERSION=$VERSION" \
+            -t marsh-hermes:candidate .
+          # Hermes names its own release (the install stamp), not "unknown".
+          docker run --rm --entrypoint /opt/hermes/src/.venv/bin/hermes marsh-hermes:candidate --version | tee /dev/stderr | grep -q "Hermes Agent v$VERSION "
+          # marsh updates the Kit; `hermes update` is refused with exit 125.
+          rc=0; docker run --rm --entrypoint /usr/local/bin/hermes marsh-hermes:candidate update || rc=$?
+          [ "$rc" = 125 ]
           # The MCP client Hermes needs for marsh's tool gateway.
           docker run --rm --entrypoint /opt/hermes/src/.venv/bin/python marsh-hermes:candidate -c 'import mcp, httpx2'
           # The Kit's entrypoint seeds a working config from an SBX-managed key.
@@ -80,4 +85,5 @@ jobs:
           COMMIT: ${{ steps.hermes.outputs.commit }}
         run: |
           docker buildx build --platform linux/arm64 --push -f hermes.yaml \
-            --build-arg "HERMES_COMMIT=$COMMIT" -t "$IMAGE:$VERSION" -t "$IMAGE:stable" .
+            --build-arg "HERMES_COMMIT=$COMMIT" --build-arg "HERMES_VERSION=$VERSION" \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:stable" .
