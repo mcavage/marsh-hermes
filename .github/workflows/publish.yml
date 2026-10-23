@@ -69,7 +69,10 @@ jobs:
           # marsh updates the Kit; `hermes update` is refused with exit 125.
           rc=0; docker run --rm --entrypoint /usr/local/bin/hermes marsh-hermes:candidate update || rc=$?
           [ "$rc" = 125 ]
-          # The MCP client Hermes needs for marsh's tool gateway.
+          # Approval prompts are off unless the caller sets HERMES_YOLO_MODE.
+          probe='sed "s|^exec .*|echo YOLO=\$HERMES_YOLO_MODE|" /usr/local/bin/hermes > /tmp/probe && sh /tmp/probe'
+          [ "$(docker run --rm -e HOME=/tmp/h --entrypoint sh marsh-hermes:candidate -c "$probe")" = YOLO=1 ]
+          [ "$(docker run --rm -e HOME=/tmp/h -e HERMES_YOLO_MODE=0 --entrypoint sh marsh-hermes:candidate -c "$probe")" = YOLO=0 ]
           docker run --rm --entrypoint /opt/hermes/src/.venv/bin/python marsh-hermes:candidate -c 'import mcp, httpx2'
           # The Kit's entrypoint seeds a working config from an SBX-managed key.
           docker run --rm -e HOME=/tmp/h -e SBX_CRED_ANTHROPIC_MODE=apikey --entrypoint sh marsh-hermes:candidate \
